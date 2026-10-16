@@ -65,6 +65,7 @@ import org.apache.activemq.store.TopicMessageStore;
 import org.apache.activemq.thread.Task;
 import org.apache.activemq.thread.TaskRunner;
 import org.apache.activemq.thread.TaskRunnerFactory;
+import org.apache.activemq.usage.MemoryUsage;
 import org.apache.activemq.transaction.Synchronization;
 import org.apache.activemq.util.SubscriptionKey;
 import org.slf4j.Logger;
@@ -86,6 +87,7 @@ public class Topic extends BaseDestination implements Task {
     static final int FANOUT_THREADS = Integer.getInteger("org.apache.activemq.broker.region.Topic.fanoutThreads", 0);
     static final int FANOUT_QUEUE_LIMIT = Integer.getInteger("org.apache.activemq.broker.region.Topic.fanoutQueueLimit", 1000);
     static final int FANOUT_BATCH = Integer.getInteger("org.apache.activemq.broker.region.Topic.fanoutBatch", 256);
+    static final int FANOUT_MEMORY_HIGH_WATER = Integer.getInteger("org.apache.activemq.broker.region.Topic.fanoutMemoryHighWater", 90);
     private static final ExecutorService FANOUT_POOL = FANOUT_THREADS > 0 ? createFanoutPool(FANOUT_THREADS) : null;
     private final ConcurrentLinkedQueue<PendingFanout> fanoutQueue = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean fanoutScheduled = new AtomicBoolean();
@@ -647,6 +649,12 @@ public class Topic extends BaseDestination implements Task {
     }
 
     private void enqueueFanout(ConnectionContext context, Message message) throws Exception {
+        MemoryUsage brokerMemory = systemUsage.getMemoryUsage();
+        while (brokerMemory.isFull(FANOUT_MEMORY_HIGH_WATER) && !brokerMemory.waitForSpace(1000, FANOUT_MEMORY_HIGH_WATER)) {
+            if (context.getStopping().get()) {
+                throw new IOException("Connection closed, send aborted.");
+            }
+        }
         while (!fanoutPermits.tryAcquire(1, TimeUnit.SECONDS)) {
             if (context.getStopping().get()) {
                 throw new IOException("Connection closed, send aborted.");
