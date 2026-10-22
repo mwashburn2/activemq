@@ -303,8 +303,13 @@ public abstract class Usage<T extends Usage> implements Service {
      * from percentUsage override this to refresh them in the same critical section.
      */
     protected void refreshPercentUsage(int value) {
+        int oldValue = percentUsage;
         percentUsage = value;
         bounds = PercentBounds.compute(value, limiter.getLimit(), percentUsageMinDelta);
+        // A refresh can consume the full->not-full crossing; release waiters or they strand.
+        if (started.get() && oldValue >= 100 && value < 100) {
+            releaseWaitersAndCallbacks();
+        }
     }
 
     protected int caclPercentUsage() {
@@ -322,13 +327,7 @@ public abstract class Usage<T extends Usage> implements Service {
         if (started.get()) {
             // Switching from being full to not being full..
             if (oldPercentUsage >= 100 && newPercentUsage < 100) {
-                waitForSpaceCondition.signalAll();
-                if (!callbacks.isEmpty()) {
-                    for (Runnable callback : callbacks) {
-                        getExecutor().execute(callback);
-                    }
-                    callbacks.clear();
-                }
+                releaseWaitersAndCallbacks();
             }
             if (!listeners.isEmpty()) {
                 // Let the listeners know on a separate thread
@@ -346,6 +345,16 @@ public abstract class Usage<T extends Usage> implements Service {
                     LOG.warn("Not notifying memory usage change to listeners on shutdown");
                 }
             }
+        }
+    }
+
+    private void releaseWaitersAndCallbacks() {
+        waitForSpaceCondition.signalAll();
+        if (!callbacks.isEmpty()) {
+            for (Runnable callback : callbacks) {
+                getExecutor().execute(callback);
+            }
+            callbacks.clear();
         }
     }
 
