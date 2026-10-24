@@ -26,6 +26,7 @@ import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.SocketFactory;
 
@@ -50,6 +51,8 @@ public class NIOTransport extends TcpTransport {
     protected ByteBuffer inputBuffer;
     protected ByteBuffer currentBuffer;
     protected int nextFrameSize;
+    protected NIOLargeBufferPool largeBufferPool = NIOLargeBufferPool.getInstance();
+    private final AtomicReference<ByteBuffer> pooledBuffer = new AtomicReference<>();
 
     public NIOTransport(WireFormat wireFormat, SocketFactory socketFactory, URI remoteLocation, URI localLocation) throws UnknownHostException, IOException {
         super(wireFormat, socketFactory, remoteLocation, localLocation);
@@ -155,7 +158,13 @@ public class NIOTransport extends TcpTransport {
                     }
 
                     if (nextFrameSize > inputBuffer.capacity()) {
-                        currentBuffer = ByteBuffer.allocateDirect(nextFrameSize);
+                        ByteBuffer pooled = largeBufferPool.acquire(nextFrameSize);
+                        if (pooled != null) {
+                            pooledBuffer.set(pooled);
+                            currentBuffer = pooled;
+                        } else {
+                            currentBuffer = ByteBuffer.allocate(nextFrameSize);
+                        }
                         currentBuffer.putInt(nextFrameSize);
                     } else {
                         inputBuffer.limit(nextFrameSize);
@@ -164,7 +173,15 @@ public class NIOTransport extends TcpTransport {
                 } else {
                     currentBuffer.flip();
 
-                    Object command = wireFormat.unmarshal(new DataInputStream(new NIOInputStream(currentBuffer)));
+                    Object command;
+                    try {
+                        command = wireFormat.unmarshal(new DataInputStream(new NIOInputStream(currentBuffer)));
+                    } finally {
+                        ByteBuffer pooled = pooledBuffer.getAndSet(null);
+                        if (pooled != null) {
+                            largeBufferPool.release(pooled);
+                        }
+                    }
                     doConsume(command);
 
                     nextFrameSize = -1;
@@ -194,6 +211,10 @@ public class NIOTransport extends TcpTransport {
         if (selection != null) {
             selection.close();
             selection = null;
+        }
+        ByteBuffer pooled = pooledBuffer.getAndSet(null);
+        if (pooled != null) {
+            largeBufferPool.discard(pooled);
         }
         super.doStop(stopper);
     }
