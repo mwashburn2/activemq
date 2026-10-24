@@ -155,7 +155,7 @@ public class NIOTransport extends TcpTransport {
                     }
 
                     if (nextFrameSize > inputBuffer.capacity()) {
-                        currentBuffer = ByteBuffer.allocateDirect(nextFrameSize);
+                        currentBuffer = ByteBuffer.allocate(nextFrameSize);
                         currentBuffer.putInt(nextFrameSize);
                     } else {
                         inputBuffer.limit(nextFrameSize);
