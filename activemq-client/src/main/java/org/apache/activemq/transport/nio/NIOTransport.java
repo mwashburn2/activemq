@@ -51,6 +51,9 @@ public class NIOTransport extends TcpTransport {
     protected ByteBuffer currentBuffer;
     protected int nextFrameSize;
 
+    static final int MAX_READ_BUFFER_SIZE =
+        Integer.getInteger("org.apache.activemq.transport.nio.maxReadBufferSize", 1024 * 1024);
+
     public NIOTransport(WireFormat wireFormat, SocketFactory socketFactory, URI remoteLocation, URI localLocation) throws UnknownHostException, IOException {
         super(wireFormat, socketFactory, remoteLocation, localLocation);
     }
@@ -133,9 +136,7 @@ public class NIOTransport extends TcpTransport {
                 if (nextFrameSize == -1) {
                     assert inputBuffer == currentBuffer;
 
-                    // If the frame is too big to fit in our direct byte buffer,
-                    // Then allocate a non direct byte buffer of the right size
-                    // for it.
+                    // Grow and keep the buffer: a fresh direct buffer per large frame triggers System.gc() via Bits.reserveMemory.
                     inputBuffer.flip();
                     nextFrameSize = inputBuffer.getInt() + 4;
 
@@ -155,7 +156,13 @@ public class NIOTransport extends TcpTransport {
                     }
 
                     if (nextFrameSize > inputBuffer.capacity()) {
-                        currentBuffer = ByteBuffer.allocateDirect(nextFrameSize);
+                        if (nextFrameSize <= MAX_READ_BUFFER_SIZE) {
+                            inputBuffer = ByteBuffer.allocateDirect(readBufferCapacityFor(nextFrameSize));
+                            inputBuffer.limit(nextFrameSize);
+                            currentBuffer = inputBuffer;
+                        } else {
+                            currentBuffer = ByteBuffer.allocate(nextFrameSize);
+                        }
                         currentBuffer.putInt(nextFrameSize);
                     } else {
                         inputBuffer.limit(nextFrameSize);
@@ -180,6 +187,11 @@ public class NIOTransport extends TcpTransport {
         } catch (Throwable e) {
             onException(IOExceptionSupport.create(e));
         }
+    }
+
+    static int readBufferCapacityFor(int frameSize) {
+        int capacity = Integer.highestOneBit(frameSize - 1) << 1;
+        return Math.min(Math.max(capacity, frameSize), MAX_READ_BUFFER_SIZE);
     }
 
     @Override
