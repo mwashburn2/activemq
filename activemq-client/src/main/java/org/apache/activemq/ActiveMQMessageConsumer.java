@@ -25,7 +25,10 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -1037,7 +1040,15 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                 final MessageAck ackToSend = ack;
 
                 if (executorService == null) {
-                    executorService = Executors.newSingleThreadExecutor();
+                    executorService = new ThreadPoolExecutor(0, 1, 5, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(), new ThreadFactory() {
+                        @Override
+                        public Thread newThread(Runnable r) {
+                            Thread thread = new Thread(r, "ActiveMQ Message Acker: " + getConsumerId());
+                            // non-daemon so an in-flight ack is not lost; core size 0 lets it exit when idle
+                            thread.setDaemon(false);
+                            return thread;
+                        }
+                    });
                 }
                 executorService.submit(new Runnable() {
                     @Override
