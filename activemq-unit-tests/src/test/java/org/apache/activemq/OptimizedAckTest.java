@@ -16,6 +16,10 @@
  */
 package org.apache.activemq;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import jakarta.jms.MessageConsumer;
@@ -179,5 +183,50 @@ public class OptimizedAckTest extends TestSupport {
                 return 0 == regionBroker.getDestinationStatistics().getInflight().getCount();
             }
         }));
+    }
+
+    public void testScheduledAckThreadDoesNotKeepJvmAlive() throws Exception {
+        final Set<Thread> threadsBefore = new HashSet<>(Thread.getAllStackTraces().keySet());
+        connection.setOptimizedAckScheduledAckInterval(500);
+        connection.start();
+        Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+        Queue queue = session.createQueue("test");
+        MessageProducer producer = session.createProducer(queue);
+        for (int i = 0; i < 10; i++) {
+            producer.send(session.createTextMessage("Hello" + i));
+        }
+
+        final RegionBroker regionBroker = (RegionBroker) BrokerRegistry.getInstance().findFirst().getRegionBroker();
+        MessageConsumer consumer = session.createConsumer(queue);
+
+        for (int i = 0; i < 5; i++) {
+            assertNotNull(consumer.receive(4000));
+        }
+
+        assertTrue("scheduled ack should ack the received messages", Wait.waitFor(new Wait.Condition() {
+            @Override
+            public boolean isSatisified() throws Exception {
+                return 5 == regionBroker.getDestinationStatistics().getInflight().getCount();
+            }
+        }, 5000, 100));
+
+        assertTrue("non-daemon acker thread still alive: " + lingeringAckerThreads(threadsBefore), Wait.waitFor(new Wait.Condition() {
+            @Override
+            public boolean isSatisified() throws Exception {
+                return lingeringAckerThreads(threadsBefore).isEmpty();
+            }
+        }, 10000, 250));
+    }
+
+    private static List<String> lingeringAckerThreads(Set<Thread> threadsBefore) {
+        List<String> names = new ArrayList<>();
+        for (Thread thread : Thread.getAllStackTraces().keySet()) {
+            String name = thread.getName();
+            if (thread.isAlive() && !thread.isDaemon() && !threadsBefore.contains(thread)
+                    && (name.startsWith("ActiveMQ Message Acker") || name.matches("pool-\\d+-thread-\\d+"))) {
+                names.add(name);
+            }
+        }
+        return names;
     }
 }
