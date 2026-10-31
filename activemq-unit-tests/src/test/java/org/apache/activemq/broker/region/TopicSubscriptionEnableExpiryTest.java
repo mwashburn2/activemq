@@ -31,6 +31,7 @@ import org.apache.activemq.broker.region.policy.OldestMessageEvictionStrategy;
 import org.apache.activemq.broker.region.policy.PolicyEntry;
 import org.apache.activemq.broker.region.policy.PolicyMap;
 import org.apache.activemq.command.ActiveMQTopic;
+import org.apache.activemq.util.Wait;
 
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -288,9 +289,7 @@ public class TopicSubscriptionEnableExpiryTest {
             // Send one more message — this triggers the guard in TopicSubscription.add()
             producer.send(session.createTextMessage("trigger"));
 
-            // Grab the destination stats
             Destination dest = broker.getDestination(new ActiveMQTopic("TEST.EXPIRY.DISABLED"));
-            long expiredCount = dest.getDestinationStatistics().getExpired().getCount();
 
             // The ExpiryCheckEnabled flag only skips the eager removeExpiredMessages() scan in
             // TopicSubscription.add(); it does NOT disable the always-on expiry paths (the per-message
@@ -307,7 +306,11 @@ public class TopicSubscriptionEnableExpiryTest {
                 }
             }
             assertNotNull("expected a TopicSubscription on the destination", sub);
+            // non-persistent sends are async, so the broker may not have processed the backlog yet
+            final TopicSubscription slowSub = sub;
+            Wait.waitFor(() -> slowSub.discarded() > 0, 10000, 10);
             int evictedCount = sub.discarded();
+            long expiredCount = dest.getDestinationStatistics().getExpired().getCount();
 
             assertTrue("eviction must clear the slow-consumer backlog when the eager expiry scan is "
                     + "disabled (evicted=" + evictedCount + ")", evictedCount > 0);
@@ -361,6 +364,7 @@ public class TopicSubscriptionEnableExpiryTest {
             }
 
             Destination dest = broker.getDestination(new ActiveMQTopic("TEST.EXPIRY.ENABLED"));
+            Wait.waitFor(() -> dest.getDestinationStatistics().getExpired().getCount() > 0, 10000, 10);
             long expiredCount = dest.getDestinationStatistics().getExpired().getCount();
 
             assertTrue(

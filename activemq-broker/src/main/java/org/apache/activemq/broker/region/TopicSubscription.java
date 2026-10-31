@@ -408,24 +408,28 @@ public class TopicSubscription extends AbstractSubscription {
         //Allow disabling inflight stats to save memory usage
         if (isUseTopicSubscriptionInflightStats()) {
             synchronized(dispatchLock) {
-                boolean inAckRange = false;
-                List<DispatchedNode> removeList = new ArrayList<>();
-                for (final DispatchedNode node : dispatched) {
-                    MessageId messageId = node.getMessageId();
-                    if (ack.getFirstMessageId() == null
-                            || ack.getFirstMessageId().equals(messageId)) {
-                        inAckRange = true;
+                int rangeStart = -1;
+                int rangeEnd = dispatched.size();
+                for (int i = 0; i < dispatched.size(); i++) {
+                    MessageId messageId = dispatched.get(i).getMessageId();
+                    if (rangeStart < 0 && (ack.getFirstMessageId() == null
+                            || ack.getFirstMessageId().equals(messageId))) {
+                        rangeStart = i;
                     }
-                    if (inAckRange) {
-                        removeList.add(node);
-                        if (ack.getLastMessageId().equals(messageId)) {
-                            break;
-                        }
+                    if (rangeStart >= 0 && ack.getLastMessageId().equals(messageId)) {
+                        rangeEnd = i + 1;
+                        break;
                     }
                 }
+                if (rangeStart < 0) {
+                    return;
+                }
+
+                final List<DispatchedNode> ackedRange = dispatched.subList(rangeStart, rangeEnd);
+                final List<DispatchedNode> removeList = new ArrayList<>(ackedRange);
+                ackedRange.clear();
 
                 for (final DispatchedNode node : removeList) {
-                    dispatched.remove(node);
                     getSubscriptionStatistics().getInflightMessageSize().addSize(-node.getSize());
 
                     final Destination destination = node.getDestination();
