@@ -67,6 +67,7 @@ import org.apache.activemq.command.ConsumerInfo;
 import org.apache.activemq.command.Message;
 import org.apache.activemq.command.MessageAck;
 import org.apache.activemq.command.MessageId;
+import org.apache.activemq.command.ProducerId;
 import org.apache.activemq.command.ProducerInfo;
 import org.apache.activemq.command.SubscriptionInfo;
 import org.apache.activemq.thread.Scheduler;
@@ -97,6 +98,7 @@ public class ManagedRegionBroker extends RegionBroker {
     private final Map<ObjectName, ProducerView> temporaryQueueProducers = new ConcurrentHashMap<>();
     private final Map<ObjectName, ProducerView> temporaryTopicProducers = new ConcurrentHashMap<>();
     private final Map<ObjectName, ProducerView> dynamicDestinationProducers = new ConcurrentHashMap<>();
+    private final Map<ProducerId, ProducerView> dynamicDestinationProducersById = new ConcurrentHashMap<>();
     private final Map<SubscriptionKey, ObjectName> subscriptionKeys = new ConcurrentHashMap<>();
     private final Map<Subscription, ObjectName> subscriptionMap = new ConcurrentHashMap<>();
     private final Set<ObjectName> registeredMBeans = ConcurrentHashMap.newKeySet();
@@ -315,12 +317,18 @@ public class ManagedRegionBroker extends RegionBroker {
         ObjectName objectName = BrokerMBeanSupport.createProducerName(brokerObjectName, context.getClientId(), info);
         String userName = brokerService.isPopulateUserNameInMBeans() ? context.getUserName() : null;
         ProducerView view = new ProducerView(info, connectionClientId, userName, this);
+        if (info.getDestination() == null && info.getProducerId() != null) {
+            dynamicDestinationProducersById.put(info.getProducerId(), view);
+        }
         registerProducer(objectName, info.getDestination(), view);
     }
 
     @Override
     public void removeProducer(ConnectionContext context, ProducerInfo info) throws Exception {
         ObjectName objectName = BrokerMBeanSupport.createProducerName(brokerObjectName, context.getClientId(), info);
+        if (info.getProducerId() != null) {
+            dynamicDestinationProducersById.remove(info.getProducerId());
+        }
         unregisterProducer(objectName);
         super.removeProducer(context, info);
     }
@@ -330,8 +338,7 @@ public class ManagedRegionBroker extends RegionBroker {
         if (exchange != null && exchange.getProducerState() != null && exchange.getProducerState().getInfo() != null) {
             ProducerInfo info = exchange.getProducerState().getInfo();
             if (info.getDestination() == null && info.getProducerId() != null) {
-                ObjectName objectName = BrokerMBeanSupport.createProducerName(brokerObjectName, exchange.getConnectionContext().getClientId(), info);
-                ProducerView view = this.dynamicDestinationProducers.get(objectName);
+                ProducerView view = dynamicDestinationProducersById.get(info.getProducerId());
                 if (view != null) {
                     ActiveMQDestination dest = message.getDestination();
                     if (dest != null) {
